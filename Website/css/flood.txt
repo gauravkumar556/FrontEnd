@@ -1,0 +1,175 @@
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h> 
+#include <ESP8266WiFi.h>
+#include <ThingSpeak.h> 
+ 
+#define TRIGGER_PIN 1
+#define ECHO_PIN 2
+#define RAIN_PIN A0 
+#define FLOW_PIN D5 
+#define GREEN_LED_PIN D6 
+#define YELLOW_LED_PIN D7 
+#define RED_LED_PIN D5
+#define BUZZER_PIN D9
+
+// WiFi settings
+char auth[] = "mwa0000018384149"; 
+const char* WIFI_SSID = "Rupam Raj"; 
+const char* WIFI_PASSWORD = "12345678"; 
+ WiFiClient  client;
+
+// ThingSpeak settings 
+const char* THINGSPEAK_API_KEY = "WWJPFUQNYNULK0G3"; 
+const unsigned long THINGSPEAK_CHANNEL_ID = 2157203; 
+
+ // Ultrasonic sensor variables 
+const float SOUND_SPEED = 343.0; // Speed of sound in m/s 
+ 
+// Raindrop sensor variables 
+const int RAIN_THRESHOLD = 800; // Adjust this value based on your raindrop sensor readings 
+ 
+// Water flow sensor variables 
+volatile int flowCount = 0; // Interrupt counter variable 
+float flowRate = 0.0; 
+unsigned int totalMilliliters = 0; 
+unsigned long prevMillis = 0; 
+
+// LCD display 
+LiquidCrystal_I2C lcd(0x27, 16, 2); 
+
+void setup() { 
+  pinMode(1,FUNCTION_3);
+  pinMode(3,FUNCTION_3);
+  pinMode(TRIGGER_PIN, OUTPUT); 
+  pinMode(ECHO_PIN, INPUT); 
+  pinMode(RAIN_PIN, INPUT); 
+  pinMode(FLOW_PIN, INPUT); 
+  pinMode(GREEN_LED_PIN, OUTPUT); 
+  pinMode(YELLOW_LED_PIN, OUTPUT); 
+  pinMode(RED_LED_PIN, OUTPUT); 
+  pinMode(BUZZER_PIN, OUTPUT); 
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, LOW);
+  digitalWrite(YELLOW_LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
+  
+  // Initialize LCD display 
+  lcd.init();
+  lcd.backlight(); 
+  lcd.clear(); 
+  lcd.setCursor(0, 0);
+  lcd.print("Flood Detection"); 
+  lcd.setCursor(0, 1);
+  lcd.print("Alerting System");
+  delay(5000);
+  lcd.clear();
+
+  // Initialize WiFi 
+ //Serial.begin(115200);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD); 
+  while (WiFi.status() != WL_CONNECTED) { 
+    delay(1000); 
+    lcd.setCursor(0, 1); 
+    lcd.print("Connecting..."); 
+  } 
+  lcd.setCursor(0, 1); 
+  lcd.print("Connected");
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+ 
+  // Initialize ThingSpeak
+  ThingSpeak.begin(client);
+ 
+  // Attach interrupt for water flow sensor 
+ attachInterrupt(digitalPinToInterrupt(FLOW_PIN), countPulse, RISING); 
+} 
+ 
+void loop() { 
+  // Read sensor values 
+  int distance = readUltrasonicSensor(); 
+  int rainValue = readrainsenser();
+  int flowValue = getFlowRate(); 
+ 
+  // Update LCD display 
+  updateLCD(distance, rainValue, flowValue); 
+ 
+  // Send data to ThingSpeak 
+  sendDataToThingSpeak(distance, rainValue, flowValue); 
+ 
+  // Check for flood conditions 
+  if (rainValue > RAIN_THRESHOLD || distance < 20) { 
+    digitalWrite(RED_LED_PIN, HIGH); 
+    digitalWrite(YELLOW_LED_PIN, LOW); 
+    digitalWrite(GREEN_LED_PIN, LOW); 
+    digitalWrite(BUZZER_PIN, HIGH); 
+  } else if (distance < 30) { 
+    digitalWrite(RED_LED_PIN, LOW); 
+    digitalWrite(YELLOW_LED_PIN, HIGH); 
+    digitalWrite(GREEN_LED_PIN, LOW); 
+    digitalWrite(BUZZER_PIN, HIGH); 
+  } else { 
+    digitalWrite(RED_LED_PIN, LOW); 
+    digitalWrite(YELLOW_LED_PIN, LOW); 
+    digitalWrite(GREEN_LED_PIN, HIGH); 
+    digitalWrite(BUZZER_PIN, LOW); 
+  } 
+ 
+  delay(2000); 
+} 
+ 
+int readUltrasonicSensor() { 
+  digitalWrite(TRIGGER_PIN, LOW); 
+  delayMicroseconds(2); 
+  digitalWrite(TRIGGER_PIN, HIGH); 
+  delayMicroseconds(10); 
+  digitalWrite(TRIGGER_PIN, LOW); 
+  float duration = pulseIn(ECHO_PIN, HIGH); 
+  int distance = duration * SOUND_SPEED / (2 * 10000); // Convert to cm 
+  return distance; 
+} 
+
+int readrainsenser() {
+  int raindrop = 1024-analogRead(RAIN_PIN);
+return raindrop;
+}
+int getFlowRate() { 
+  unsigned long currentMillis = millis(); 
+  if (currentMillis - prevMillis >= 1000) { 
+    detachInterrupt(digitalPinToInterrupt(FLOW_PIN)); 
+ 
+    flowRate = (1000.0 / (currentMillis - prevMillis)) * flowCount; 
+    totalMilliliters += (flowCount / 7.5); // 7.5 pulses per liter 
+ 
+    flowCount = 0; 
+    prevMillis = currentMillis; 
+ 
+    attachInterrupt(digitalPinToInterrupt(FLOW_PIN), countPulse, RISING); 
+  } 
+  return flowRate; 
+}
+ 
+void updateLCD(int distance, int rainValue, int flowValue) { 
+  lcd.clear(); 
+  lcd.setCursor(0, 0); 
+  lcd.print("Distance: "); 
+  lcd.print(distance); 
+  lcd.print(" cm"); 
+ 
+  lcd.setCursor(0, 1); 
+  lcd.print("Rain: "); 
+  lcd.print(rainValue); 
+ 
+  lcd.print(" Flow: "); 
+  lcd.print(flowValue); 
+  lcd.print(" mL/s"); 
+} 
+ 
+void sendDataToThingSpeak(int distance, int rainValue, int flowValue) { 
+  ThingSpeak.setField(1, distance); 
+  ThingSpeak.setField(2, rainValue); 
+  ThingSpeak.setField(3, flowValue);
+  ThingSpeak.writeFields(THINGSPEAK_CHANNEL_ID, THINGSPEAK_API_KEY); 
+} 
+ 
+void countPulse() { 
+  flowCount++; 
+}
